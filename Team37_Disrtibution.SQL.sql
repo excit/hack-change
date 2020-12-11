@@ -1,0 +1,125 @@
+--====================--
+-- Команда 37 Gorben++
+------ Расчет ND--------
+--====================--
+
+-- Шаг 1: Расчет количества активных SHIP_TO, группировка по дате, территории и товару.
+
+CREATE TABLE Team37_ACTIVE_SHIP_TO as 
+SELECT *
+FROM (
+      SELECT
+          LTRIM(TO_CHAR("VW_JDLV_SALES"."PGI_DATE",'mm-yyyy'),'0') AS SHIP_DATE,
+          "VW_JDLV_SALES"."SHIP_TO", 
+          "VW_JDLV_SALES"."SKU" as "SKU",
+          "MD_CUSTOMERS"."TERR_LVL3" as "TERR_LVL3" 
+    FROM "MD_CUSTOMERS" "MD_CUSTOMERS", "VW_JDLV_SALES" "VW_JDLV_SALES" 
+    WHERE "VW_JDLV_SALES"."SHIP_TO"="MD_CUSTOMERS"."SHIP_TO"  
+      GROUP BY PGI_DATE, TERR_LVL3, VW_JDLV_SALES.SHIP_TO, VW_JDLV_SALES.SKU
+    ORDER BY TERR_LVL3 desc
+) a;
+
+-- Шаг 2: Выносим активные SHIP_TO в разрезе территории
+
+CREATE TABLE Team37_ACTIVE_TERR AS
+SELECT  SHIP_DATE, 
+    TERR_LVL3, 
+    COUNT(distinct SHIP_TO) AS ACTIVE_COUNT 
+FROM Team37_ACTIVE_SHIP_TO
+GROUP BY SHIP_DATE, TERR_LVL3;
+
+-- Шаг 3: Создаем временную таблицу для более удобного деления.
+
+CREATE TABLE Team37_FOR_DIVIDE AS
+SELECT  Team37_ACTIVE_SHIP_TO.SHIP_DATE, 
+    COUNT(distinct SHIP_TO) AS COUNT_SHIP2, 
+    SKU, 
+    Team37_ACTIVE_SHIP_TO.TERR_LVL3, 
+    ACTIVE_COUNT 
+FROM Team37_ACTIVE_SHIP_TO JOIN Team37_ACTIVE_TERR 
+ON Team37_ACTIVE_SHIP_TO.SHIP_DATE = Team37_ACTIVE_TERR.SHIP_DATE 
+    AND Team37_ACTIVE_SHIP_TO.TERR_LVL3 = Team37_ACTIVE_TERR.TERR_LVL3
+GROUP BY Team37_ACTIVE_SHIP_TO.SHIP_DATE, Team37_ACTIVE_SHIP_TO.TERR_LVL3, SKU,  ACTIVE_COUNT;
+
+-- Шаг 4: Заносим результат в новую таблицу ND
+
+CREATE TABLE Team37_ND AS
+SELECT  SHIP_DATE, 
+    SKU, 
+    TERR_LVL3,  
+    CAST((Team37_FOR_DIVIDE.COUNT_SHIP2 / Team37_FOR_DIVIDE.ACTIVE_COUNT) AS decimal(6,5)) as ND 
+FROM Team37_FOR_DIVIDE;
+
+--====================--
+-- Команда 37 Gorben++
+------ Расчет WD--------
+--====================--
+
+-- Шаг 1: Расчет количества активных SHIP_TO по VOL > 0, группировка по дате, территории и товару.
+
+CREATE TABLE Team37_ACTIVE_VOL as 
+SELECT *
+FROM (
+      SELECT
+          LTRIM(TO_CHAR("VW_JDLV_SALES"."PGI_DATE",'mm-yyyy'),'0') AS SHIP_DATE,
+          "VW_JDLV_SALES"."SHIP_TO", 
+          "VW_JDLV_SALES"."SKU" as "SKU",
+          "MD_CUSTOMERS"."TERR_LVL3" as "TERR_LVL3",
+          SUM("VW_JDLV_SALES"."VOL") as "VOL"
+    FROM "MD_CUSTOMERS" "MD_CUSTOMERS", "VW_JDLV_SALES" "VW_JDLV_SALES" 
+    WHERE "VW_JDLV_SALES"."SHIP_TO"="MD_CUSTOMERS"."SHIP_TO"
+    AND "VOL" > 0
+      GROUP BY PGI_DATE, TERR_LVL3, VW_JDLV_SALES.SHIP_TO, VW_JDLV_SALES.SKU
+    ORDER BY TERR_LVL3 desc
+) a;
+
+-- Шаг 2: Выносим VOL в разрезе территории
+
+CREATE TABLE Team37_VOL_TERR AS
+SELECT SHIP_DATE, 
+    TERR_LVL3, 
+    SUM(VOL) AS VOL_SUM_TOTAL 
+FROM Team37_ACTIVE_VOL
+GROUP BY SHIP_DATE, TERR_LVL3;
+
+-- Шаг 3: Создаем временную таблицу для более удобного деления.
+
+CREATE TABLE Team37_FOR_DIVIDE_VOL as
+SELECT Team37_ACTIVE_VOL.SHIP_DATE, 
+    SUM(VOL) AS SKU_VOL, 
+    SKU, 
+    Team37_ACTIVE_VOL.TERR_LVL3, 
+    VOL_SUM_TOTAL
+FROM Team37_ACTIVE_VOL JOIN Team37_VOL_TERR ON 
+    Team37_ACTIVE_VOL.SHIP_DATE = Team37_VOL_TERR.SHIP_DATE 
+    AND Team37_ACTIVE_VOL.TERR_LVL3 = Team37_VOL_TERR.TERR_LVL3
+GROUP BY Team37_ACTIVE_VOL.SHIP_DATE, Team37_ACTIVE_VOL.TERR_LVL3, SKU,  VOL_SUM_TOTAL;
+
+-- Шаг 4: Заносим результат в новую таблицу WD
+
+CREATE TABLE Team37_WD AS
+SELECT SHIP_DATE, 
+    SKU, 
+    TERR_LVL3, 
+    CAST((SKU_VOL / VOL_SUM_TOTAL) AS decimal(6,5)) AS WD 
+FROM Team37_FOR_DIVIDE_VOL;
+
+-- ОФОРМЛЕНИЕ РЕЗУЛЬТАТОВ В ФИНАЛЬНУЮ ТАБЛИЦУ
+
+INSERT INTO TD_RES_ND_WD (SKU, TERR_LVL3, WD, ND)
+SELECT * 
+FROM    (
+    SELECT TEAM37_ACTIVE_SHIP_TO.SKU, 
+        TEAM37_ACTIVE_SHIP_TO.TERR_LVL3, 
+        WD, 
+        ND 
+    FROM TEAM37_WD JOIN TEAM37_ACTIVE_SHIP_TO
+    ON TEAM37_WD.SHIP_DATE = Team37_ACTIVE_SHIP_TO.SHIP_DATE AND TEAM37_WD.SKU = Team37_ACTIVE_SHIP_TO.SKU 
+    AND TEAM37_WD.TERR_LVL3 = Team37_ACTIVE_SHIP_TO.TERR_LVL3 
+    JOIN TEAM37_ND  ON
+    Team37_ACTIVE_SHIP_TO.SHIP_DATE = TEAM37_ND.SHIP_DATE AND Team37_ACTIVE_SHIP_TO.SKU = TEAM37_ND.SKU AND Team37_ACTIVE_SHIP_TO.TERR_LVL3 = TEAM37_ND.TERR_LVL3
+    WHERE TEAM37_ACTIVE_SHIP_TO.SHIP_DATE='4-2020'
+    );
+
+
+UPDATE TD_RES_ND_WD SET TEAM = 'Team37';
